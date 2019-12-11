@@ -1,17 +1,63 @@
 import mock_db
 import uuid
 from worker import worker_main
+from threading import Timer
 from threading import Thread
+from datetime import datetime
+from datetime import timedelta
+import time
 
-def lock_is_free():
+initiated=False
+
+
+def lock_is_free_no_variable(db):
     """
-        CHANGE ME, POSSIBLY MY ARGS
-
-        Return whether the lock is free
+        Version of lock that does not use initiated variable, for if you consider that to be a local lock.
     """
+    try:
+        db.insert_one({"_id":"Lock","Lock":True})
+        return True
+    except Exception:
+        pass
+    lockStatus=db.count({"_id":"Lock","Lock":True})
+    if lockStatus==1:
+        return False
+    else:
+        db.update_one({"_id":"Lock","Lock":False},{"_id":"Lock","Lock":True})
+        return True
 
-    return True
+def lock_is_free(db):
+    """
+    checks if lock is free, if it is, locks and returns true
+    else returns false
+    Args: 
+        db: instance of MockDB
+    Returns: Boolean
+    """
+    global initiated
+    if not initiated: #this is purely to save time; this would still work if done from multiple machines, since inserting is expensive
+        try:
+            db.insert_one({"_id":"Lock","Lock":True})
+            initiated=True
+            return True
+        except Exception: 
+            pass
+    lockStatus=db.count({"_id":"Lock","Lock":True})
+    if lockStatus==1:
+        return False
+    else:
+        db.update_one({"_id":"Lock","Lock":False},{"_id":"Lock","Lock":True})
+        return True
 
+def unlock(db):
+    """after process is done, remove hte lock
+    Args:
+        db: instance of MockDB
+     """
+    db.update_one({"_id":"Lock","Lock":True},{"_id":"Lock","Lock":False})
+
+def timeout():
+    raise Exception("Timeout Exception")
 
 def attempt_run_worker(worker_hash, give_up_after, db, retry_interval):
     """
@@ -27,9 +73,21 @@ def attempt_run_worker(worker_hash, give_up_after, db, retry_interval):
                             until the lock is free, unless we have been trying for more
                             than give_up_after seconds
     """
-    if lock_is_free():
-        worker_main(worker_hash, db)
-
+    end=datetime.now()+timedelta(seconds=give_up_after)
+    while(datetime.now()<end):
+        if lock_is_free(db):
+            try:
+                #print("thread {0} is using the lock now".format(worker_hash))
+                worker_main(worker_hash, db)
+                #print("thread {0} is done with the lock now".format(worker_hash))
+            except Exception as e:
+                print(e)
+            finally:
+                unlock(db)
+                return
+        else:
+            time.sleep(retry_interval)
+    print("thread {0} has timed out")
 
 if __name__ == "__main__":
     """
