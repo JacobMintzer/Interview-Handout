@@ -35,22 +35,23 @@ def lock_is_free(db):
     Returns: Boolean
     """
     global initiated
-    if not initiated: #this is purely to save time; this would still work if done from multiple machines, since inserting is expensive
-        try:
+    lock=db.find_one({"_id":"Lock"})
+    
+    try:
+        if lock is None:
             db.insert_one({"_id":"Lock","Lock":True})
             initiated=True
             return True
-        except Exception: 
-            pass
-    lockStatus=db.count({"_id":"Lock","Lock":True})
-    if lockStatus==1:
+    except Exception: 
+        return False #if there is a race condition, and this one is second, we can assume that the process hasn't ended yet and the lock isn't free
+    if lock["Lock"]:
         return False
     else:
         db.update_one({"_id":"Lock","Lock":False},{"_id":"Lock","Lock":True})
         return True
 
 def unlock(db):
-    """after process is done, remove hte lock
+    """after process is done, remove the lock
     Args:
         db: instance of MockDB
      """
@@ -61,9 +62,9 @@ def timeout():
 
 def attempt_run_worker(worker_hash, give_up_after, db, retry_interval):
     """
-        CHANGE MY IMPLEMENTATION, BUT NOT FUNCTION SIGNATURE
-
-        Run the worker from worker.py by calling worker_main
+        Notes start time, then continually checks lock until give_up_after seconds have passed. 
+        When lock is free, starts the process, then unlocks the lock.
+        
 
         Args:
             worker_hash: a random string we will use as an id for the running worker
